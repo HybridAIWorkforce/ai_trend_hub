@@ -1,0 +1,245 @@
+generator client {
+    provider = "prisma-client-js"
+    binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
+    output = "/home/ubuntu/ai_trend_hub/nextjs_space/node_modules/.prisma/client"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+// User model for authentication (designed for future multi-user expansion)
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  password      String
+  image         String?
+  role          String    @default("user") // user, admin
+  ctaSettings   Json?     // Call-to-action configuration (book links, videos, affiliate products)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  accounts      Account[]
+  sessions      Session[]
+  savedItems    SavedItem[]
+  articles      Article[]
+}
+
+// NextAuth models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Categories for organizing trends
+model Category {
+  id          String      @id @default(cuid())
+  name        String      @unique // general_ai, sales_ai, recruitment_ai, reddit
+  displayName String      // General AI News, AI in Sales, etc.
+  description String?
+  icon        String?     // lucide icon name
+  color       String?     // hex color for UI
+  order       Int         @default(0)
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  trendItems  TrendItem[]
+  sources     Source[]
+  articles    Article[]
+}
+
+// Data sources (RSS feeds, Reddit subreddits, APIs)
+model Source {
+  id          String      @id @default(cuid())
+  type        String      // rss, reddit, api
+  name        String
+  url         String?
+  feedUrl     String?     // For RSS
+  subreddit   String?     // For Reddit
+  apiEndpoint String?     // For API sources
+  categoryId  String
+  active      Boolean     @default(true)
+  lastFetchedAt DateTime?
+  fetchInterval Int       @default(30) // minutes
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  category    Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  trendItems  TrendItem[]
+}
+
+// Trend items from all sources
+model TrendItem {
+  id           String      @id @default(cuid())
+  sourceType   String      // rss, reddit, api
+  sourceId     String
+  categoryId   String
+  
+  title        String
+  summary      String?     @db.Text
+  content      String?     @db.Text
+  link         String
+  sourceName   String
+  
+  // Reddit-specific fields
+  subreddit    String?
+  score        Int?
+  numComments  Int?
+  
+  // Metadata
+  tags         String[]    @default([])
+  trendScore   Float       @default(0)
+  publishedAt  DateTime
+  fetchedAt    DateTime    @default(now())
+  
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  
+  category     Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  source       Source      @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  savedItems   SavedItem[]
+  articles     Article[]
+  
+  @@index([categoryId])
+  @@index([sourceType])
+  @@index([publishedAt])
+  @@index([trendScore])
+}
+
+// User saved/bookmarked items
+model SavedItem {
+  id          String    @id @default(cuid())
+  userId      String
+  trendItemId String
+  notes       String?   @db.Text
+  createdAt   DateTime  @default(now())
+  
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trendItem   TrendItem @relation(fields: [trendItemId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, trendItemId])
+  @@index([userId])
+}
+
+// Articles created from trend items
+model Article {
+  id                String    @id @default(cuid())
+  ownerUserId       String
+  sourceTrendItemId String?   // nullable - can create article from scratch
+  categoryId        String?
+  
+  // Article metadata
+  title             String
+  angleSummary      String?   @db.Text
+  
+  // Generation settings
+  audience          String?
+  goal              String?   // educate, thought_leadership, how_to, news_analysis
+  format            String?   // short_blog, standard_blog, deep_dive
+  tone              String?   // professional, conversational, bold, analytical
+  language          String    @default("English")
+  lengthPreference  String?   // 600-800, 1000-1500, 2000+
+  
+  // Content
+  outlineJson       Json?     // Structured outline
+  currentContentMarkdown String? @db.Text
+  
+  // Status
+  status            String    @default("draft") // draft, ready_to_publish, archived
+  
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  owner             User      @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  sourceTrendItem   TrendItem? @relation(fields: [sourceTrendItemId], references: [id], onDelete: SetNull)
+  category          Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  versions          ArticleVersion[]
+  
+  @@index([ownerUserId])
+  @@index([sourceTrendItemId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Article versions for tracking edits and regenerations
+model ArticleVersion {
+  id              String    @id @default(cuid())
+  articleId       String
+  versionNumber   Int
+  
+  title           String
+  outlineJson     Json?
+  contentMarkdown String    @db.Text
+  metadataJson    Json?     // Stores settings at time of generation
+  
+  createdAt       DateTime  @default(now())
+  
+  article         Article   @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  
+  @@unique([articleId, versionNumber])
+  @@index([articleId])
+}
+
+// CTA performance tracking
+model CTAEvent {
+  id          String    @id @default(cuid())
+  userId      String
+  articleId   String?
+  ctaType     String    // book, video, affiliate, custom
+  ctaLabel    String    // Display name/text of the CTA
+  ctaLink     String    // Target URL
+  eventType   String    // impression, click, copy
+  platform    String?   // web, social_twitter, social_linkedin, social_facebook
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+  @@index([articleId])
+  @@index([ctaType])
+  @@index([createdAt])
+}
+
+// Job status tracking
+model JobRun {
+  id          String    @id @default(cuid())
+  jobType     String    // rss_fetch, reddit_scrape
+  status      String    // pending, running, success, failed
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  itemsProcessed Int    @default(0)
+  errorMessage String?  @db.Text
+  metadata    Json?
+}
