@@ -1,0 +1,144 @@
+name: Scheduled Code Review
+
+on:
+  schedule:
+    # Run every Monday at 9:00 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  code-analysis:
+    name: Automated Code Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run ESLint with reviewdog
+        uses: reviewdog/action-eslint@v1
+        with:
+          reporter: github-pr-review
+          eslint_flags: '--ext .ts,.tsx,.js,.jsx .'
+
+      - name: Run dependency check
+        run: |
+          echo "## Dependency Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Outdated Packages" >> $GITHUB_STEP_SUMMARY
+          yarn outdated --json 2>/dev/null | jq -r '.[] | "- \(.[0]): \(.[1]) → \(.[2])"' >> $GITHUB_STEP_SUMMARY || echo "No outdated packages or command failed" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check for security vulnerabilities
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Security Audit" >> $GITHUB_STEP_SUMMARY
+          yarn audit --json 2>/dev/null | jq -s '[.[].data.advisories | values[] | {package: .module_name, severity: .severity, title: .title}] | unique_by(.package)' | jq -r '.[] | "- **\(.severity)**: \(.package) - \(.title)"' >> $GITHUB_STEP_SUMMARY || echo "Audit completed" >> $GITHUB_STEP_SUMMARY
+        continue-on-error: true
+
+      - name: Run complexity analysis
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Code Complexity" >> $GITHUB_STEP_SUMMARY
+          find . -name '*.ts' -o -name '*.tsx' | grep -v node_modules | head -20 | while read file; do
+            lines=$(wc -l < "$file")
+            if [ $lines -gt 300 ]; then
+              echo "- ⚠️ $file has $lines lines (consider refactoring)" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+  create-review-issue:
+    name: Create Review Issue
+    runs-on: ubuntu-latest
+    needs: code-analysis
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Create weekly review issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `🔍 Weekly Code Review - ${{ steps.date.outputs.date }}`;
+            const body = `
+            ## Automated Weekly Code Review
+            
+            This issue was automatically created by the scheduled code review workflow.
+            
+            ### Review Checklist
+            - [ ] Review open pull requests
+            - [ ] Check for outdated dependencies
+            - [ ] Review security advisories
+            - [ ] Check code complexity metrics
+            - [ ] Review test coverage
+            - [ ] Update documentation if needed
+            
+            ### Actions Required
+            Please review the findings in the workflow run summary and address any critical issues.
+            
+            ---
+            *This issue will be automatically closed next week when a new review is created.*
+            `;
+            
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['code-review', 'automated']
+            });
+
+  stale-pr-review:
+    name: Stale PR Review
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check for stale PRs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pulls } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open'
+            });
+            
+            const now = new Date();
+            const staleThreshold = 7 * 24 * 60 * 60 * 1000; // 7 days
+            
+            for (const pr of pulls) {
+              const updated = new Date(pr.updated_at);
+              const age = now - updated;
+              
+              if (age > staleThreshold) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: `⏰ This PR has been inactive for ${Math.floor(age / (24 * 60 * 60 * 1000))} days. Please review and update or close if no longer needed.`
+                });
+              }
+            }
