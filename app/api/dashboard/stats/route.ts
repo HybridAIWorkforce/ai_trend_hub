@@ -48,7 +48,7 @@ export async function GET() {
       },
     });
 
-    const byCategory = categories.map(cat => ({
+    const byCategory = categories.map((cat: (typeof categories)[number]) => ({
       categoryId: cat.id,
       categoryName: cat.displayName,
       count: cat?._count?.trendItems ?? 0,

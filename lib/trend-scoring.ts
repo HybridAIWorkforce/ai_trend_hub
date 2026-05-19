@@ -98,7 +98,7 @@ export async function normalizeAllScores(): Promise<void> {
   if (items.length === 0) return;
 
   // 1. Compute raw scores
-  const rawScores = items.map((item) => ({
+  const rawScores = items.map((item: (typeof items)[number]) => ({
     id: item.id,
     raw: computeRawScore(
       item.sourceType as 'reddit' | 'rss',
@@ -113,13 +113,13 @@ export async function normalizeAllScores(): Promise<void> {
   }));
 
   // 2. Find min / max
-  const rawValues = rawScores.map((r) => r.raw);
+  const rawValues = rawScores.map((r: (typeof rawScores)[number]) => r.raw);
   const minRaw = Math.min(...rawValues);
   const maxRaw = Math.max(...rawValues);
   const range = maxRaw - minRaw || 1; // avoid /0
 
   // 3. Normalize to 1–100 (top → 95-100, bottom → 1-10)
-  const normalized = rawScores.map((r) => {
+  const normalized = rawScores.map((r: (typeof rawScores)[number]) => {
     const pct = (r.raw - minRaw) / range; // 0..1
     // Map 0..1 → 1..100 with slight curve for spread
     const score = Math.round(1 + pct * 99);
@@ -131,7 +131,7 @@ export async function normalizeAllScores(): Promise<void> {
   for (let i = 0; i < normalized.length; i += CHUNK) {
     const chunk = normalized.slice(i, i + CHUNK);
     await prisma.$transaction(
-      chunk.map((c) =>
+      chunk.map((c: (typeof normalized)[number]) =>
         prisma.trendItem.update({
           where: { id: c.id },
           data: { trendScore: c.score },

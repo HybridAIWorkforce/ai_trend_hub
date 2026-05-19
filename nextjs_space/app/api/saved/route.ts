@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
       take: limit,
     });
 
-    const items = savedItems.map(saved => ({
+    const items = savedItems.map((saved: (typeof savedItems)[number]) => ({
       ...saved?.trendItem,
       isSaved: true,
       savedAt: saved?.createdAt,

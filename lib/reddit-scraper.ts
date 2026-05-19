@@ -1,6 +1,5 @@
 // Reddit Web Scraper (no API required)
 import axios from 'axios';
-import * as cheerio from 'cheerio';
 import { prisma } from './db';
 
 interface RedditPost {
@@ -13,6 +12,38 @@ interface RedditPost {
   created: number;
   selfText?: string;
 }
+
+const CORE_AI_KEYWORDS = [
+  'ai', 'artificial intelligence', 'machine learning', 'ml', 'gpt', 'llm',
+  'chatgpt', 'openai', 'deep learning', 'neural', 'model', 'training',
+  'nlp', 'computer vision', 'generative', 'automation', 'bot', 'agentic', 'agent'
+];
+
+const HIGH_SIGNAL_KEYWORDS = [
+  'agentic', 'workflow', 'automation', 'copilot', 'enterprise', 'startup',
+  'funding', 'benchmark', 'research', 'paper', 'release', 'launch', 'open source',
+  'api', 'inference', 'fine-tuning', 'deployment', 'pricing', 'saas', 'product',
+  'sales', 'crm', 'recruiting', 'recruitment', 'hiring', 'hr', 'customer support'
+];
+
+const LOW_SIGNAL_QUESTION_PATTERNS = [
+  /^is it possible/i,
+  /^any recommendations/i,
+  /^what should i/i,
+  /^wondering if/i,
+  /^does anyone know/i,
+  /^help/i,
+];
+
+const OFF_TOPIC_PATTERNS = [
+  /minecraft/i,
+  /mod(pack)?/i,
+  /dating/i,
+  /girlfriend|boyfriend|relationship/i,
+  /homework|assignment|exam/i,
+  /dream diar/i,
+  /fanfic/i,
+];
 
 export async function scrapeRedditSubreddit(
   subreddit: string,
@@ -38,22 +69,19 @@ export async function scrapeRedditSubreddit(
       const post = child?.data;
       if (!post) continue;
 
-      // Filter for AI-related posts
-      const title = post?.title ?? '';
-      const selfText = post?.selftext ?? '';
-      const combinedText = title + ' ' + selfText;
-      
-      if (isAIRelated(combinedText)) {
-        posts.push({
-          title: post.title,
-          link: `https://www.reddit.com${post?.permalink ?? ''}`,
-          subreddit: post?.subreddit ?? subreddit,
-          score: post?.score ?? 0,
-          numComments: post?.num_comments ?? 0,
-          author: post?.author ?? 'unknown',
-          created: post?.created_utc ?? Date.now() / 1000,
-          selfText: post?.selftext ?? '',
-        });
+      const candidatePost: RedditPost = {
+        title: post?.title ?? '',
+        link: `https://www.reddit.com${post?.permalink ?? ''}`,
+        subreddit: post?.subreddit ?? subreddit,
+        score: post?.score ?? 0,
+        numComments: post?.num_comments ?? 0,
+        author: post?.author ?? 'unknown',
+        created: post?.created_utc ?? Date.now() / 1000,
+        selfText: post?.selftext ?? '',
+      };
+
+      if (shouldIncludeRedditPost(candidatePost)) {
+        posts.push(candidatePost);
       }
     }
 
@@ -140,15 +168,53 @@ export async function scrapeAllRedditSources() {
   return totalItems;
 }
 
-function isAIRelated(text: string): boolean {
-  const aiKeywords = [
-    'ai', 'artificial intelligence', 'machine learning', 'ml', 'gpt', 'llm',
-    'chatgpt', 'openai', 'deep learning', 'neural', 'model', 'training',
-    'nlp', 'computer vision', 'generative', 'automation', 'bot'
-  ];
-  
+function countKeywordMatches(text: string, keywords: string[]): number {
   const lowerText = text?.toLowerCase() ?? '';
-  return aiKeywords.some(keyword => lowerText.includes(keyword));
+  return keywords.filter((keyword) => lowerText.includes(keyword.toLowerCase())).length;
+}
+
+function shouldIncludeRedditPost(post: RedditPost): boolean {
+  const title = post?.title ?? '';
+  const selfText = post?.selfText ?? '';
+  const combinedText = `${title} ${selfText}`.trim();
+  const lowerTitle = title.toLowerCase();
+  const lowerText = combinedText.toLowerCase();
+
+  if (!combinedText) return false;
+
+  if (OFF_TOPIC_PATTERNS.some((pattern) => pattern.test(lowerText))) {
+    return false;
+  }
+
+  const aiKeywordMatches = countKeywordMatches(combinedText, CORE_AI_KEYWORDS);
+  if (aiKeywordMatches === 0) {
+    return false;
+  }
+
+  const signalKeywordMatches = countKeywordMatches(combinedText, HIGH_SIGNAL_KEYWORDS);
+  const hasStrongEngagement = post.score >= 5 || post.numComments >= 3;
+  const hasStrongHeadline = /(launch|release|benchmark|research|paper|study|funding|agentic|open source|api|copilot)/i.test(title);
+  const looksLikeLowSignalQuestion = title.includes('?') || LOW_SIGNAL_QUESTION_PATTERNS.some((pattern) => pattern.test(title));
+  const hasMeaningfulBody = selfText.trim().length >= 120;
+
+  if (looksLikeLowSignalQuestion && !hasStrongEngagement && signalKeywordMatches < 2) {
+    return false;
+  }
+
+  if (aiKeywordMatches === 1 && signalKeywordMatches === 0 && !hasStrongEngagement && !hasStrongHeadline) {
+    return false;
+  }
+
+  if (!hasStrongEngagement && !hasStrongHeadline && !hasMeaningfulBody && signalKeywordMatches < 2) {
+    return false;
+  }
+
+  // Keep recruiting/sales/business-adjacent discussions even with moderate engagement.
+  if (/(sales|crm|recruit|hiring|hr|revenue|customer)/i.test(lowerTitle)) {
+    return true;
+  }
+
+  return hasStrongEngagement || hasStrongHeadline || signalKeywordMatches >= 2 || hasMeaningfulBody;
 }
 
 function extractRedditTags(text: string): string[] {

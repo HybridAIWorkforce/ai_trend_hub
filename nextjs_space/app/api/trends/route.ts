@@ -70,7 +70,7 @@ export async function GET(req: NextRequest) {
     });
 
     // Add isSaved flag
-    const itemsWithSaved = items.map(item => ({
+    const itemsWithSaved = items.map((item: (typeof items)[number]) => ({
       ...item,
       isSaved: (item?.savedItems?.length ?? 0) > 0,
       savedItems: undefined,
